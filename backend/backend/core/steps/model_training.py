@@ -77,15 +77,15 @@ class ModelTrainer:
                 model_name = self._get_auto_model_choice(X_train, y_train)
             
             # Train the model
-            self.model = self._train_selected_model(model_name, X_train, y_train)
-            self.model_name = model_name
+            self.model, actual_model_name = self._train_selected_model(model_name, X_train, y_train)
+            self.model_name = actual_model_name
             
             # Evaluate the model
             results = self._evaluate_model(X_test, y_test, target_col)
             
             # Store training information
             self.training_info = {
-                "model_name": model_name,
+                "model_name": actual_model_name,
                 "target_column": target_col,
                 "train_size": X_train.shape[0],
                 "test_size": X_test.shape[0],
@@ -153,7 +153,7 @@ class ModelTrainer:
             y_train: Training targets
             
         Returns:
-            Trained model
+            Tuple of (trained_model, model_name_string)
         """
         if model_choice == "1":  # Random Forest
             model = RandomForestClassifier(
@@ -162,6 +162,7 @@ class ModelTrainer:
                 max_depth=10,
                 min_samples_split=5
             )
+            model_name = "Random Forest"
             print("🌲 Training Random Forest...")
             
         elif model_choice == "2":  # Gradient Boosting
@@ -171,6 +172,7 @@ class ModelTrainer:
                 max_depth=6,
                 learning_rate=0.1
             )
+            model_name = "Gradient Boosting"
             print("📈 Training Gradient Boosting...")
             
         elif model_choice == "3":  # Logistic Regression
@@ -178,6 +180,7 @@ class ModelTrainer:
                 random_state=42,
                 max_iter=1000
             )
+            model_name = "Logistic Regression"
             print("📊 Training Logistic Regression...")
             
         elif model_choice == "4":  # SVM
@@ -185,6 +188,7 @@ class ModelTrainer:
                 random_state=42,
                 probability=True
             )
+            model_name = "Support Vector Machine"
             print("🎯 Training Support Vector Machine...")
             
         else:
@@ -192,9 +196,9 @@ class ModelTrainer:
         
         # Train the model
         model.fit(X_train, y_train)
-        logger.info(f"Successfully trained {type(model).__name__}")
+        logger.info(f"Successfully trained {model_name}")
         
-        return model
+        return model, model_name
     
     def _evaluate_model(self, X_test: np.ndarray, y_test: np.ndarray, target_col: str) -> Dict[str, Any]:
         """

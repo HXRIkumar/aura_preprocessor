@@ -1,0 +1,6 @@
+age,salary,city,purchased
+25,50000,New York,Yes
+30,60000,London,No
+,70000,New York,Yes
+35,,Paris,No
+40,80000,,Yes

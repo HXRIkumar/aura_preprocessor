@@ -18,14 +18,16 @@ class MissingValueHandler:
     Handles missing values in datasets with multiple strategies.
     """
     
-    def __init__(self, mode: str = "auto"):
+    def __init__(self, mode: str = "auto", llm_recommendations: Optional[Dict] = None):
         """
         Initialize the missing value handler.
         
         Args:
             mode: Execution mode - "auto" or "step"
+            llm_recommendations: LLM recommendations for missing value handling
         """
         self.mode = mode
+        self.llm_recommendations = llm_recommendations
         self.handling_info = {}  # Store handling decisions for reporting
     
     def process(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, any]]:
@@ -133,7 +135,7 @@ class MissingValueHandler:
     
     def _get_auto_choice(self, col: str, perc: float, df: pd.DataFrame) -> str:
         """
-        Automatically choose handling method based on heuristics.
+        Automatically choose handling method based on LLM recommendations or heuristics.
         
         Args:
             col: Column name
@@ -143,6 +145,49 @@ class MissingValueHandler:
         Returns:
             Auto-selected choice
         """
+        # Check if LLM has specific recommendation for this column
+        if self.llm_recommendations and "columns" in self.llm_recommendations:
+            column_recs = self.llm_recommendations["columns"]
+            if col in column_recs:
+                strategy = column_recs[col].lower()
+                logger.info(f"Using LLM recommendation for {col}: {strategy}")
+                print(f"🤖 LLM recommends: {strategy} for {col}")
+                
+                if strategy in ["drop", "remove"]:
+                    return "1"
+                elif strategy == "mean":
+                    return "2"
+                elif strategy == "median":
+                    return "3"
+                elif strategy in ["mode", "most_frequent"]:
+                    return "4"
+        
+        # Check for general strategy recommendation from LLM
+        if self.llm_recommendations and "strategy" in self.llm_recommendations:
+            general_strategy = self.llm_recommendations["strategy"].lower()
+            
+            # High missing percentage (>50%) - drop column
+            if perc > 50:
+                logger.info(f"Auto-dropping column {col} (high missing percentage: {perc:.2f}%)")
+                return "1"
+            
+            # Apply general LLM strategy based on column type
+            if df[col].dtype in ["float64", "int64"]:
+                if general_strategy == "mean":
+                    logger.info(f"LLM: Using mean for numeric column {col}")
+                    return "2"
+                elif general_strategy == "median":
+                    logger.info(f"LLM: Using median for numeric column {col}")
+                    return "3"
+                else:
+                    # Default to mean for numeric
+                    return "2"
+            else:
+                # Categorical - use mode
+                logger.info(f"LLM: Using mode for categorical column {col}")
+                return "4"
+        
+        # Fallback to original heuristics if no LLM recommendations
         # High missing percentage (>50%) - drop column
         if perc > 50:
             logger.info(f"Auto-dropping column {col} (high missing percentage: {perc:.2f}%)")

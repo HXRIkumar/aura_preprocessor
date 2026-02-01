@@ -37,7 +37,8 @@ class AuraPipeline:
     and LLM-powered explanations.
     """
     
-    def __init__(self, filepath: str, mode: str = "auto", target_col: Optional[str] = None):
+    def __init__(self, filepath: str, mode: str = "auto", target_col: Optional[str] = None, 
+                 llm_recommendations: Optional[Dict[str, Any]] = None):
         """
         Initialize the AURA pipeline.
         
@@ -45,6 +46,7 @@ class AuraPipeline:
             filepath: Path to the CSV dataset
             mode: Execution mode - "auto" or "step"
             target_col: Target column name (auto-detected if None)
+            llm_recommendations: LLM recommendations for preprocessing (optional)
         """
         self.filepath = filepath
         self.mode = mode
@@ -53,6 +55,7 @@ class AuraPipeline:
         self.processed_df = None
         self.preprocessing_steps = []
         self.pipeline_info = {}
+        self.llm_recommendations = llm_recommendations  # Store LLM recommendations
         
         # Initialize components
         self.llm_helper = LLMHelper()
@@ -62,7 +65,12 @@ class AuraPipeline:
         self._load_dataset()
         self._detect_target_column()
         
+        # Initialize processed_df with original data
+        self.processed_df = self.original_df.copy()
+        
         logger.info(f"AURA Pipeline initialized for {filepath} in {mode} mode")
+        if llm_recommendations:
+            logger.info("LLM recommendations will be used for preprocessing decisions")
     
     def _load_dataset(self) -> None:
         """
@@ -98,12 +106,20 @@ class AuraPipeline:
             # Common target column names
             target_candidates = [
                 'target', 'label', 'y', 'class', 'outcome', 'result',
-                'survived', 'price', 'sales', 'revenue', 'profit'
+                'survived', 'price', 'sales', 'revenue', 'profit', 'pclass'
             ]
+            
+            # Exclude ID-like columns and names
+            exclude_patterns = ['id', 'ticket', 'name', 'passenger', 'index', 'cabin']
+            
+            def is_valid_target(col_name: str) -> bool:
+                """Check if column name is a valid target (not an ID column)"""
+                col_lower = col_name.lower()
+                return not any(pattern in col_lower for pattern in exclude_patterns)
             
             # Look for exact matches first
             for candidate in target_candidates:
-                if candidate in self.original_df.columns:
+                if candidate in self.original_df.columns and is_valid_target(candidate):
                     self.target_col = candidate
                     break
             
@@ -111,53 +127,55 @@ class AuraPipeline:
             if self.target_col is None:
                 for col in self.original_df.columns:
                     col_lower = col.lower()
-                    if any(candidate in col_lower for candidate in target_candidates):
+                    if any(candidate in col_lower for candidate in target_candidates) and is_valid_target(col):
                         self.target_col = col
                         break
             
-            # If still no match, use the last column (common convention)
+            # If still no match, use the last column that's not an ID column
             if self.target_col is None:
-                self.target_col = self.original_df.columns[-1]
-                logger.warning(f"No target column detected, using last column: {self.target_col}")
+                valid_columns = [col for col in self.original_df.columns if is_valid_target(col)]
+                if valid_columns:
+                    self.target_col = valid_columns[-1]
+                else:
+                    self.target_col = self.original_df.columns[-1]
+                logger.warning(f"No target column detected, using: {self.target_col}")
         
         logger.info(f"Target column: {self.target_col}")
         print(f"🎯 Target column: {self.target_col}")
     
     def handle_missing_values(self) -> None:
         """
-        Handle missing values in the dataset.
+        Handle missing values using appropriate strategies.
         """
-        if self.original_df is None:
-            raise ValueError("Dataset not loaded. Cannot handle missing values.")
-        
-        print("\n=== STEP 1: Handle Missing Values ===")
+        print("\n" + "="*60)
+        print("STEP 1: Handle Missing Values")
+        print("="*60)
         
         try:
-            handler = MissingValueHandler(self.mode)
-            self.processed_df, missing_info = handler.process(self.original_df)
+            # Pass LLM recommendations to the handler
+            llm_missing_rec = None
+            if self.llm_recommendations and "missing" in self.llm_recommendations:
+                llm_missing_rec = self.llm_recommendations["missing"]
+                logger.info("Using LLM recommendations for missing values")
             
-            # Store step information
-            step_info = {
+            handler = MissingValueHandler(self.mode, llm_recommendations=llm_missing_rec)
+            self.processed_df, missing_info = handler.process(self.processed_df)
+            
+            # Log the step
+            self.preprocessing_steps.append({
                 "step_name": "missing_values_handling",
-                "timestamp": datetime.now().isoformat(),
-                "details": missing_info,
-                "data_shape_before": self.original_df.shape,
-                "data_shape_after": self.processed_df.shape
-            }
-            self.preprocessing_steps.append(step_info)
+                "details": missing_info
+            })
             
-            # Generate LLM explanation
             if self.mode == "step":
                 self.llm_helper.explain_step(
-                    "Missing values handled", 
-                    self.processed_df.head(),
-                    {"missing_info": missing_info}
+                    "Missing values handled",
+                    data_sample=self.processed_df.head(),
+                    additional_info={"missing_info": missing_info}
                 )
-            
-            logger.info("Missing values handling completed")
-            
+        
         except Exception as e:
-            error_msg = f"Error in missing values handling: {str(e)}"
+            error_msg = f"Error handling missing values: {str(e)}"
             logger.error(error_msg)
             raise RuntimeError(error_msg)
     
@@ -171,8 +189,15 @@ class AuraPipeline:
         print("\n=== STEP 2: Encode Categorical Features ===")
         
         try:
-            encoder = FeatureEncoder(self.mode)
-            self.processed_df, encoding_info = encoder.encode_features(self.processed_df)
+            # Pass LLM recommendations to the encoder
+            llm_encoding_rec = None
+            if self.llm_recommendations and "encoding" in self.llm_recommendations:
+                llm_encoding_rec = self.llm_recommendations["encoding"]
+                logger.info("Using LLM recommendations for encoding")
+            
+            encoder = FeatureEncoder(self.mode, llm_recommendations=llm_encoding_rec)
+            # Pass target column to preserve it during encoding
+            self.processed_df, encoding_info = encoder.encode_features(self.processed_df, self.target_col)
             
             # Store step information
             step_info = {
@@ -224,7 +249,13 @@ class AuraPipeline:
         print("\n=== STEP 3: Scale Numerical Features ===")
         
         try:
-            scaler = FeatureScaler(self.mode)
+            # Pass LLM recommendations to the scaler
+            llm_scaling_rec = None
+            if self.llm_recommendations and "scaling" in self.llm_recommendations:
+                llm_scaling_rec = self.llm_recommendations["scaling"]
+                logger.info("Using LLM recommendations for scaling")
+            
+            scaler = FeatureScaler(self.mode, llm_recommendations=llm_scaling_rec)
             X_scaled, scaling_info = scaler.scale_features(self.processed_df, self.target_col)
             
             # Store step information
