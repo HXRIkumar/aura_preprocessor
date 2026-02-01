@@ -19,14 +19,16 @@ class FeatureScaler:
     Handles scaling of numerical features with multiple strategies.
     """
     
-    def __init__(self, mode: str = "auto"):
+    def __init__(self, mode: str = "auto", llm_recommendations: Optional[Dict] = None):
         """
         Initialize the feature scaler.
         
         Args:
             mode: Execution mode - "auto" or "step"
+            llm_recommendations: LLM recommendations for scaling
         """
         self.mode = mode
+        self.llm_recommendations = llm_recommendations
         self.scaling_info = {}  # Store scaling decisions for reporting
         self.scaler = None
     
@@ -88,7 +90,7 @@ class FeatureScaler:
     
     def _get_auto_scaler_choice(self, X: np.ndarray) -> str:
         """
-        Automatically choose scaling method based on data characteristics.
+        Automatically choose scaling method based on LLM recommendations or data characteristics.
         
         Args:
             X: Feature matrix
@@ -96,6 +98,22 @@ class FeatureScaler:
         Returns:
             Auto-selected scaler type
         """
+        # Check if LLM has recommendation for scaling
+        if self.llm_recommendations and "strategy" in self.llm_recommendations:
+            strategy = self.llm_recommendations["strategy"].lower()
+            logger.info(f"Using LLM recommendation for scaling: {strategy}")
+            print(f"🤖 LLM recommends: {strategy} scaling")
+            
+            if strategy in ["standard", "standardscaler"]:
+                return "1"
+            elif strategy in ["minmax", "minmaxscaler"]:
+                return "2"
+            elif strategy in ["robust", "robustscaler"]:
+                return "3"
+            elif strategy in ["none", "skip"]:
+                return "4"
+        
+        # Fallback to original heuristics if no LLM recommendations
         # Check for outliers using IQR method
         has_outliers = self._detect_outliers(X)
         

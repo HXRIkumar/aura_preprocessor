@@ -19,22 +19,25 @@ class FeatureEncoder:
     Handles encoding of categorical features with multiple strategies.
     """
     
-    def __init__(self, mode: str = "auto"):
+    def __init__(self, mode: str = "auto", llm_recommendations: Optional[Dict] = None):
         """
         Initialize the feature encoder.
         
         Args:
             mode: Execution mode - "auto" or "step"
+            llm_recommendations: LLM recommendations for encoding
         """
         self.mode = mode
+        self.llm_recommendations = llm_recommendations
         self.encoding_info = {}  # Store encoding decisions for reporting
     
-    def encode_features(self, df: pd.DataFrame) -> Tuple[pd.DataFrame, Dict[str, any]]:
+    def encode_features(self, df: pd.DataFrame, target_col: Optional[str] = None) -> Tuple[pd.DataFrame, Dict[str, any]]:
         """
         Encode categorical features in the dataset.
         
         Args:
             df: Input DataFrame
+            target_col: Optional target column name to preserve during encoding
             
         Returns:
             Tuple of (encoded_df, encoding_info)
@@ -42,11 +45,29 @@ class FeatureEncoder:
         df_encoded = df.copy()
         categorical_cols = df_encoded.select_dtypes(include=['object']).columns.tolist()
         
+        # Remove target column from encoding if it exists and is categorical
+        if target_col and target_col in categorical_cols:
+            categorical_cols.remove(target_col)
+            logger.info(f"Preserving target column '{target_col}' from encoding")
+            
+            # But we still need to encode it for the model - apply label encoding to target
+            if target_col in df_encoded.columns and df_encoded[target_col].dtype == 'object':
+                le = LabelEncoder()
+                df_encoded[target_col] = le.fit_transform(df_encoded[target_col])
+                self.encoding_info[target_col] = {
+                    "original_column": target_col,
+                    "unique_values": len(le.classes_),
+                    "encoding_method": "label_encoding (target)",
+                    "new_columns": [],
+                    "is_target": True
+                }
+                logger.info(f"Applied label encoding to target column '{target_col}'")
+        
         if not categorical_cols:
-            logger.info("No categorical columns found for encoding")
+            logger.info("No categorical feature columns found for encoding")
             return df_encoded, self.encoding_info
         
-        logger.info(f"Found {len(categorical_cols)} categorical columns: {categorical_cols}")
+        logger.info(f"Found {len(categorical_cols)} categorical feature columns: {categorical_cols}")
         
         for col in categorical_cols:
             df_encoded, col_info = self._encode_column(df_encoded, col)
@@ -82,9 +103,11 @@ class FeatureEncoder:
             df, col_info = self._apply_label_encoding(df, col, col_info)
         elif choice == "2":  # One-Hot Encoding
             df, col_info = self._apply_onehot_encoding(df, col, col_info)
-        elif choice == "3":  # Skip
-            col_info["encoding_method"] = "skipped"
-            logger.info(f"Skipped encoding for column: {col}")
+        elif choice == "3":  # Drop column
+            df = df.drop(columns=[col])
+            col_info["encoding_method"] = "dropped"
+            logger.info(f"Dropped column: {col}")
+            print(f"🗑️  Dropped column '{col}' (not useful for model)")
         else:
             col_info["encoding_method"] = "skipped"
             logger.warning(f"Invalid choice for column {col}, skipping")
@@ -105,7 +128,7 @@ class FeatureEncoder:
         print(f"\n⚡ Encoding options for column '{col}' ({unique_values} unique values):")
         print("   1) Label Encode (recommended for ordinal data)")
         print("   2) One-Hot Encode (recommended for nominal data)")
-        print("   3) Skip")
+        print("   3) Drop column (remove from dataset)")
         
         while True:
             choice = input(f"👉 Enter choice for {col}: ").strip()
@@ -115,7 +138,7 @@ class FeatureEncoder:
     
     def _get_auto_choice(self, col: str, unique_values: int, df: pd.DataFrame) -> str:
         """
-        Automatically choose encoding method based on heuristics.
+        Automatically choose encoding method based on LLM recommendations or heuristics.
         
         Args:
             col: Column name
@@ -125,6 +148,32 @@ class FeatureEncoder:
         Returns:
             Auto-selected choice
         """
+        # Check if LLM has specific recommendation for this column
+        if self.llm_recommendations and "columns" in self.llm_recommendations:
+            column_recs = self.llm_recommendations["columns"]
+            if col in column_recs:
+                strategy = column_recs[col].lower()
+                logger.info(f"Using LLM recommendation for {col}: {strategy}")
+                print(f"🤖 LLM recommends: {strategy} for {col}")
+                
+                if strategy in ["drop", "remove", "skip"]:
+                    return "3"  # Skip this column
+                elif strategy in ["label", "label_encoding"]:
+                    return "1"
+                elif strategy in ["onehot", "one-hot", "onehot_encoding"]:
+                    return "2"
+        
+        # Check for general strategy recommendation from LLM
+        if self.llm_recommendations and "strategy" in self.llm_recommendations:
+            general_strategy = self.llm_recommendations["strategy"].lower()
+            logger.info(f"Using LLM general encoding strategy: {general_strategy}")
+            
+            if general_strategy in ["label", "label_encoding"]:
+                return "1"
+            elif general_strategy in ["onehot", "one-hot", "onehot_encoding"]:
+                return "2"
+        
+        # Fallback to original heuristics if no LLM recommendations
         # Heuristic: Use one-hot for high cardinality, label for low cardinality
         if unique_values > 10:
             logger.info(f"Auto-selecting one-hot encoding for {col} (high cardinality: {unique_values})")
